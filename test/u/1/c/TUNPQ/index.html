@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <title>Fondamenti di IA - Classroom</title>
+  <link rel="stylesheet" href="/content.css">
+  <script src="/test/mock-chrome.js"></script>
+  <style>
+    body { font-family: Roboto, sans-serif; max-width: 720px; margin: 24px auto; }
+    [data-stream-item-id] { border: 1px solid #dadce0; border-radius: 8px; padding: 12px; margin-bottom: 12px; cursor: pointer; }
+    h2 { font-size: 14px; margin: 0; }
+  </style>
+</head>
+<body>
+  <!-- Riproduce la struttura vista sullo stream vero: righe chiuse senza link a Drive. -->
+  <main role="main">
+    <section>
+      <div data-stream-item-id="111" jsaction="click:open">
+        <div role="link" tabindex="0" aria-label='Materiale: "Lezione 1 - Introduzione "'></div>
+        <div><i aria-hidden="true">book</i></div>
+        <h2><span>Materiale: "Lezione 1 - Introduzione "</span></h2>
+        <div><span>Prof ha pubblicato un nuovo materiale: Lezione 1 - Introduzione</span></div>
+        <div data-type="2" data-stream-item-id="111"></div>
+      </div>
+      <div data-stream-item-id="222" jsaction="click:open">
+        <div role="link" tabindex="0" aria-label='Compito: "Esercitazione 1"'></div>
+        <div><i aria-hidden="true">assignment</i></div>
+        <h2><span>Compito: "Esercitazione 1"</span></h2>
+        <div><span>Prof ha pubblicato un nuovo compito: Esercitazione 1</span></div>
+        <div data-type="1" data-stream-item-id="222"></div>
+      </div>
+      <div data-stream-item-id="444">
+        <div>Prof · 3 ott</div>
+        <p>Annuncio con un allegato già visibile.</p>
+        <div><a href="https://drive.google.com/file/d/ANN1/view">Calendario.pdf</a><span>PDF</span></div>
+        <button>Aggiungi commento al corso</button>
+      </div>
+    </section>
+  </main>
+  <script>
+    // Come su Classroom: cliccare la riga apre il post.
+    document.addEventListener("click", (e) => {
+      const item = e.target.closest('[jsaction="click:open"]');
+      if (item) window.__opened = item.dataset.streamItemId;
+    });
+  </script>
+  <script src="/i18n.js"></script>
+  <script src="/content.js"></script>
+</body>
+</html>

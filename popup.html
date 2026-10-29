@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <!-- Elements with data-i18n get their text from _locales (see popup.js). -->
+  <header>
+    <img src="icons/icon48.png" alt="" width="24" height="24">
+    <h1 data-i18n="extName"></h1>
+  </header>
+
+  <section id="page">
+    <p id="status" class="muted" data-i18n="popupChecking"></p>
+    <button id="toggle" class="primary" hidden></button>
+  </section>
+
+  <section>
+    <h2 data-i18n="popupFormats"></h2>
+    <label class="row"><span data-i18n="popupDocs"></span>
+      <select id="docFormat">
+        <option value="pdf">PDF</option>
+        <option value="docx">Word (.docx)</option>
+      </select>
+    </label>
+    <label class="row"><span data-i18n="popupSlides"></span>
+      <select id="slidesFormat">
+        <option value="pdf">PDF</option>
+        <option value="pptx">PowerPoint (.pptx)</option>
+      </select>
+    </label>
+    <label class="row"><span data-i18n="popupSheets"></span>
+      <select id="sheetsFormat">
+        <option value="xlsx">Excel (.xlsx)</option>
+        <option value="pdf">PDF</option>
+      </select>
+    </label>
+  </section>
+
+  <section>
+    <h2 data-i18n="popupMultiple"></h2>
+    <label class="check"><input type="checkbox" id="zip"><span data-i18n="popupZip"></span></label>
+    <label class="check"><input type="checkbox" id="postFolders"><span data-i18n="popupPostFolders"></span></label>
+    <label class="check"><input type="checkbox" id="courseFolder"><span data-i18n="popupCourseFolder"></span></label>
+  </section>
+
+  <script src="i18n.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
