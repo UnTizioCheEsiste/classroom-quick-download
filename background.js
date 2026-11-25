@@ -11,9 +11,6 @@ const pendingFolders = new Map();
 // and a Blob URL would be saved under a random name.
 const pendingNames = new Map();
 
-// Pause between downloads, so Google doesn't rate-limit us.
-const DOWNLOAD_GAP_MS = 350;
-
 chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   const fullName = pendingNames.get(item.url);
   if (fullName) {
@@ -27,25 +24,122 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
   suggest({ filename: `${folder}/${name}`, conflictAction: "uniquify" });
 });
 
-/** items: [{ url, folder }] — folder is a path relative to the Downloads folder. */
-async function downloadMany(items) {
-  let ok = 0;
-  let failed = 0;
-  for (const item of items) {
+// --- Download queue ----------------------------------------------------------
+// Bulk downloads go through a queue: a few at a time instead of all at once
+// (dozens of parallel videos all crawl). The state lives in storage.session
+// because the service worker sleeps between events; download events wake it.
+
+const QUEUE_CONCURRENCY = 5;
+const QUEUE_KEY = "queue";
+
+const emptyQueue = () => ({
+  pending: [], // [{ url, folder, name }] waiting for a slot
+  active: {}, // downloadId → item
+  total: 0,
+  done: 0,
+  failed: [], // names
+  bytesDone: 0,
+  lastDoneId: null, // to open the folder at the end
+  cancelled: false,
+});
+
+const remaining = (q) => q.pending.length + Object.keys(q.active).length;
+
+// Queue operations run one after the other: read state, change it, save it.
+let queueLock = Promise.resolve();
+function withQueue(fn) {
+  const run = queueLock.then(async () => {
+    const { [QUEUE_KEY]: q = emptyQueue() } = await chrome.storage.session.get(QUEUE_KEY);
+    const result = await fn(q);
+    await chrome.storage.session.set({ [QUEUE_KEY]: q });
+    const n = remaining(q);
+    chrome.action.setBadgeBackgroundColor({ color: "#1e8e3e" });
+    chrome.action.setBadgeText({ text: n ? String(n) : "" });
+    return result;
+  });
+  queueLock = run.catch(() => {});
+  return run;
+}
+
+/** Starts queued downloads until QUEUE_CONCURRENCY are running. */
+async function fillSlots(q) {
+  while (Object.keys(q.active).length < QUEUE_CONCURRENCY && q.pending.length) {
+    const item = q.pending.shift();
     const url = await bypassDriveWarning(item.url);
     if (item.folder) pendingFolders.set(url, item.folder);
     try {
-      await chrome.downloads.download({ url });
-      ok++;
+      const id = await chrome.downloads.download({ url });
+      q.active[id] = item;
     } catch (err) {
       console.warn("[Classroom Quick Download]", url, err);
       pendingFolders.delete(url);
-      failed++;
+      q.failed.push(item.name || item.url);
     }
-    await new Promise((r) => setTimeout(r, DOWNLOAD_GAP_MS));
   }
-  return { ok: failed === 0, started: ok, failed };
 }
+
+/** items: [{ url, folder, name }] — folder is a path relative to the Downloads folder. */
+function enqueue(items) {
+  return withQueue(async (q) => {
+    if (!remaining(q)) Object.assign(q, emptyQueue()); // previous batch finished: start fresh
+    q.pending.push(...items);
+    q.total += items.length;
+    await fillSlots(q);
+    return { ok: true, queued: items.length };
+  });
+}
+
+function queueStatus() {
+  return withQueue(async (q) => {
+    const ids = Object.keys(q.active).map(Number);
+    const found = (await Promise.all(ids.map((id) => chrome.downloads.search({ id })))).flat();
+    let bytes = q.bytesDone;
+    const active = found.map((d) => {
+      bytes += d.bytesReceived;
+      return { name: d.filename.split(/[\\/]/).pop() || q.active[d.id]?.name, received: d.bytesReceived, total: d.totalBytes };
+    });
+    return {
+      total: q.total,
+      done: q.done,
+      failed: q.failed,
+      pending: q.pending.length,
+      active,
+      bytes,
+      cancelled: q.cancelled,
+      canShow: q.lastDoneId != null,
+    };
+  });
+}
+
+function cancelQueue() {
+  return withQueue(async (q) => {
+    const ids = Object.keys(q.active).map(Number);
+    q.pending = [];
+    q.active = {}; // their "interrupted" events will be ignored
+    q.cancelled = true;
+    await Promise.all(ids.map((id) => chrome.downloads.cancel(id).catch(() => {})));
+  });
+}
+
+chrome.downloads.onChanged.addListener((delta) => {
+  const state = delta.state?.current;
+  if (state !== "complete" && state !== "interrupted") return;
+  onZipSaved(delta.id);
+  withQueue(async (q) => {
+    const item = q.active[delta.id];
+    if (!item) return;
+    delete q.active[delta.id];
+    if (state === "complete") {
+      q.done++;
+      q.lastDoneId = delta.id;
+      const [d] = await chrome.downloads.search({ id: delta.id });
+      q.bytesDone += d?.fileSize || d?.bytesReceived || 0;
+    } else {
+      q.failed.push(item.name || item.url);
+    }
+    await fillSlots(q);
+  });
+});
 
 // --- ZIP -------------------------------------------------------------------
 // A service worker can't create Blob URLs: the files are fetched and packed in
@@ -82,11 +176,11 @@ async function downloadZip(files, filename, baseFolder, tabId) {
       return { ok: false, error: res?.error || t("zipFailed"), failedNames: (res?.failed || []).map((f) => f.name) };
     }
 
-    // Videos and large files: normal downloads, streamed to disk in parallel.
+    // Videos and large files: queued as normal downloads, streamed to disk.
     const separate = res.separate || [];
     if (separate.length) {
-      await downloadMany(
-        separate.map((f) => ({ url: f.url, folder: [baseFolder, f.folder].filter(Boolean).join("/") }))
+      await enqueue(
+        separate.map((f) => ({ url: f.url, name: f.name, folder: [baseFolder, f.folder].filter(Boolean).join("/") }))
       );
     }
 
@@ -111,10 +205,8 @@ async function downloadZip(files, filename, baseFolder, tabId) {
 }
 
 // Once the ZIP is saved (or cancelled), free the offscreen document's memory.
-chrome.downloads.onChanged.addListener(async (delta) => {
-  const state = delta.state?.current;
-  if (state !== "complete" && state !== "interrupted") return;
-  const key = `zip:${delta.id}`;
+async function onZipSaved(downloadId) {
+  const key = `zip:${downloadId}`;
   const { [key]: jobId } = await chrome.storage.session.get(key);
   if (!jobId) return;
   await chrome.storage.session.remove(key);
@@ -123,7 +215,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
   if (!Object.keys(rest).some((k) => k.startsWith("zip:"))) {
     await chrome.offscreen.closeDocument().catch(() => {});
   }
-});
+}
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // ZIP progress: from the offscreen document to the Classroom tab.
@@ -132,23 +224,30 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return;
   }
 
-  if (msg?.type === "downloadZip" && Array.isArray(msg.files)) {
-    downloadZip(msg.files, msg.filename, msg.baseFolder || "", sender.tab?.id).then(sendResponse, (err) =>
-      sendResponse({ ok: false, error: String(err.message || err) })
-    );
-    return true;
-  }
-
-  if (msg?.type === "download" && typeof msg.url === "string") {
-    bypassDriveWarning(msg.url)
-      .then((url) => chrome.downloads.download({ url }))
-      .then((downloadId) => sendResponse({ ok: true, downloadId }))
-      .catch((err) => sendResponse({ ok: false, error: err.message }));
+  const reply = (promise) => {
+    promise.then(sendResponse, (err) => sendResponse({ ok: false, error: String(err.message || err) }));
     return true; // async response
-  }
+  };
 
-  if (msg?.type === "downloadMany" && Array.isArray(msg.items)) {
-    downloadMany(msg.items).then(sendResponse);
-    return true;
+  if (msg?.type === "downloadZip" && Array.isArray(msg.files)) {
+    return reply(downloadZip(msg.files, msg.filename, msg.baseFolder || "", sender.tab?.id));
+  }
+  if (msg?.type === "download" && typeof msg.url === "string") {
+    return reply(
+      bypassDriveWarning(msg.url)
+        .then((url) => chrome.downloads.download({ url }))
+        .then((downloadId) => ({ ok: true, downloadId }))
+    );
+  }
+  if (msg?.type === "downloadMany" && Array.isArray(msg.items)) return reply(enqueue(msg.items));
+  if (msg?.type === "queueStatus") return reply(queueStatus());
+  if (msg?.type === "queueCancel") return reply(cancelQueue().then(() => ({ ok: true })));
+  if (msg?.type === "queueShowFolder") {
+    return reply(
+      withQueue(async (q) => {
+        if (q.lastDoneId != null) chrome.downloads.show(q.lastDoneId);
+        return { ok: true };
+      })
+    );
   }
 });

@@ -114,7 +114,7 @@ async function buildZip({ jobId, files, tabId }) {
 
   const results = new Array(files.length);
   const failed = [];
-  const separate = []; // { url, folder } — downloaded normally by the service worker
+  const separate = []; // { url, name, folder } — queued as normal downloads by the service worker
   let next = 0;
   const worker = async () => {
     while (next < files.length) {
@@ -122,7 +122,7 @@ async function buildZip({ jobId, files, tabId }) {
       const file = files[i];
       try {
         const entry = SEPARATE_TYPES.has(file.type) ? SEPARATE : await fetchFile(file, progress);
-        if (entry === SEPARATE) separate.push({ url: file.url, folder: file.folder || "" });
+        if (entry === SEPARATE) separate.push({ url: file.url, name: file.name, folder: file.folder || "" });
         else results[i] = entry;
       } catch (err) {
         failed.push({ name: file.name, error: String(err.message || err) });

@@ -82,6 +82,20 @@ button.primary {
 }
 button.primary:hover { background: var(--accent-hover); }
 
+button.secondary {
+  font: inherit;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--fg);
+  background: var(--field);
+  cursor: pointer;
+}
+
+#queue p { margin: 0 0 6px; }
+.bar { height: 6px; border-radius: 3px; background: var(--field); overflow: hidden; margin-bottom: 6px; }
+.fill { height: 100%; width: 0; background: var(--accent); transition: width 0.4s; }
+
 @media (prefers-color-scheme: dark) {
   button.primary { color: #202124; }
 }

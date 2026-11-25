@@ -17,6 +17,7 @@ A Chrome / Brave / Edge extension (Manifest V3) that makes downloading Google Cl
   - *Single ZIP* — one `<course> - <date>.zip` file, so you only save once; off = separate files.
   - *One folder per post* — subfolders named after each post (inside the ZIP or in Downloads).
   - *Classroom/&lt;course&gt;/* — everything goes to `Downloads/Classroom/<course>/`.
+- **Background download queue** — bulk downloads (and the videos kept out of the ZIP) run 5 at a time in the background, even if you leave Classroom. A card on the page and the popup show progress (done / in progress / queued, data downloaded, % per file), with *Cancel* and, at the end, *Show in folder*. The icon badge shows how many files are left.
 - **Google files format** — Docs as PDF or Word, Slides as PDF or PowerPoint, Sheets as Excel or PDF.
 
 | Attachment | Downloaded as |
@@ -82,7 +83,13 @@ checks how Drive's "can't scan this file for viruses" page (large files such as 
 node test/offscreen-test.mjs
 ```
 
-checks which files go in the ZIP and which are downloaded separately.
+checks which files go in the ZIP and which are downloaded separately, and
+
+```bash
+node test/queue-test.mjs
+```
+
+checks the background download queue.
 
 Mock Classroom pages for testing `content.js` outside Chrome:
 

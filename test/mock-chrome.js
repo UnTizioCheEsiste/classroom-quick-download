@@ -14,8 +14,13 @@
     runtime: {
       getManifest: () => ({ version: "test" }),
       sendMessage(msg, cb) {
+        // window.__queueStatus: fake background queue state for the progress card.
+        if (msg.type === "queueStatus") return setTimeout(() => cb(window.__queueStatus || {}), 10);
+        if (msg.type.startsWith("queue")) return setTimeout(() => cb({ ok: true }), 10);
         window.__downloads.push(msg);
-        setTimeout(() => cb({ ok: true, started: (msg.urls || msg.items || msg.files || [1]).length, failed: 0, zip: msg.type === "downloadZip" }), 50);
+        const n = (msg.items || msg.files || [1]).length;
+        const res = msg.type === "downloadMany" ? { ok: true, queued: n } : { ok: true, started: n, failed: 0, zip: msg.type === "downloadZip" };
+        setTimeout(() => cb(res), 50);
       },
       onMessage: { addListener(fn) { window.__onMessage = fn; } },
     },

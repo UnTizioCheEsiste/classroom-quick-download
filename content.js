@@ -259,15 +259,22 @@
     }
     return sendMessage({
       type: "downloadMany",
-      items: files.map((f) => ({ url: f.url, folder: joinPath(courseFolder(), postFolder(f)) })),
+      items: files.map((f) => ({ url: f.url, name: f.label, folder: joinPath(courseFolder(), postFolder(f)) })),
     });
+  }
+
+  /** Bulk download + progress card for whatever ended up in the background queue. */
+  async function bulkDownload(files, onProgress) {
+    const res = await downloadFiles(files, onProgress);
+    if (res.ok && (res.queued || res.separate)) progressCard.start();
+    return res;
   }
 
   function resultText(res) {
     if (!res.ok) return t("errorPrefix", res.error || t("downloadFailed"));
     const parts = [];
     if (res.zip) parts.push(t("zipReady", res.started));
-    else if (!res.separate) parts.push(t("downloadsStarted", res.started));
+    if (res.queued) parts.push(t("downloadsQueued", res.queued));
     if (res.separate) parts.push(t("separateStarted", res.separate));
     const what = parts.join(" · ");
     if (!res.failed) return `${what}.`;
@@ -374,7 +381,7 @@
       allBtnBusy = true;
       const label = btn.querySelector("span");
       label.textContent = settings.zip ? t("zipPreparing") : t("startingDownloads", allFiles.length);
-      const res = await downloadFiles(allFiles, ({ done, total }) => {
+      const res = await bulkDownload(allFiles, ({ done, total }) => {
         label.textContent = t("zipProgress", done, total);
       });
       label.textContent = resultText(res);
@@ -861,7 +868,7 @@
         settings.zip && files.length > 1 ? t("zipPreparing") : t("startingDownloads", files.length);
       updateToolbar();
       try {
-        const res = await downloadFiles(files, ({ done, total }) => {
+        const res = await bulkDownload(files, ({ done, total }) => {
           $("status").textContent = t("zipProgress", done, total);
         });
         selection.lastResult = res;
@@ -951,6 +958,149 @@
     selection.ui = null;
     refresh();
   }
+
+  // ---------------------------------------------------------------------------
+  // Progress card for the background download queue (bottom right)
+  // ---------------------------------------------------------------------------
+
+  function formatBytes(n) {
+    if (!n) return "0 MB";
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+    return `${(n / 1024 ** i).toFixed(i >= 3 ? 2 : i >= 2 ? 1 : 0)} ${units[i]}`;
+  }
+
+  const CARD_CSS = `
+    :host { all: initial; }
+    .card {
+      box-sizing: border-box;
+      width: min(340px, calc(100vw - 32px));
+      font: 13px/1.4 "Google Sans", Roboto, system-ui, sans-serif;
+      color: #202124;
+      background: #fff;
+      border: 1px solid #dadce0;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(60, 64, 67, 0.25);
+      padding: 12px 14px;
+      display: grid;
+      gap: 8px;
+    }
+    .head { display: flex; align-items: center; gap: 8px; }
+    .title { font-weight: 600; flex: 1; }
+    .bar { height: 6px; border-radius: 3px; background: #e6f4ea; overflow: hidden; }
+    .fill { height: 100%; background: #1e8e3e; transition: width 0.4s; }
+    .meta, .failed { color: #5f6368; }
+    .failed { color: #d93025; }
+    .meta:empty, .failed:empty, .files:empty { display: none; }
+    .files { display: grid; gap: 4px; max-height: 140px; overflow: auto; }
+    .file { display: grid; grid-template-columns: 1fr auto; gap: 8px; color: #3c4043; }
+    .file span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .file span:last-child { color: #5f6368; font-variant-numeric: tabular-nums; }
+    .actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .actions:empty { display: none; }
+    button {
+      font: inherit;
+      border: 1px solid #dadce0;
+      background: #fff;
+      color: #1a73e8;
+      border-radius: 6px;
+      padding: 4px 10px;
+      cursor: pointer;
+    }
+    button:hover { background: #f1f3f4; }
+    button.close { border: 0; color: #5f6368; font-size: 18px; line-height: 1; padding: 2px 6px; }
+  `;
+
+  const progressCard = {
+    host: null,
+    timer: null,
+
+    build() {
+      const host = document.createElement("div");
+      host.className = UI_CLASS;
+      host.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:16px;";
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = `
+        <style>${CARD_CSS}</style>
+        <div class="card" role="status" aria-live="polite">
+          <div class="head">
+            <span class="title" id="title"></span>
+            <button class="close" id="close" title="${escapeHtml(t("close"))}" aria-label="${escapeHtml(t("close"))}">×</button>
+          </div>
+          <div class="bar"><div class="fill" id="fill"></div></div>
+          <div class="meta" id="meta"></div>
+          <div class="files" id="files"></div>
+          <div class="failed" id="failed"></div>
+          <div class="actions" id="actions"></div>
+        </div>`;
+      shieldEvents(host);
+      const $ = (id) => root.getElementById(id);
+      $("close").addEventListener("click", () => this.hide());
+      $("actions").addEventListener("click", async (e) => {
+        const action = e.target.closest("button")?.dataset.action;
+        if (action === "cancel") await sendMessage({ type: "queueCancel" });
+        if (action === "show") await sendMessage({ type: "queueShowFolder" });
+        this.poll();
+      });
+      this.$ = $;
+      this.host = host;
+      document.body.appendChild(host);
+    },
+
+    /** Shows the card and follows the queue until it's empty. */
+    start() {
+      if (!this.host) this.build();
+      if (!this.host.isConnected) document.body.appendChild(this.host);
+      clearInterval(this.timer);
+      this.timer = setInterval(() => this.poll(), 1000);
+      this.poll();
+    },
+
+    hide() {
+      clearInterval(this.timer);
+      this.timer = null;
+      this.host?.remove();
+    },
+
+    async poll() {
+      const s = await sendMessage({ type: "queueStatus" });
+      if (!this.host || s.ok === false || s.total == null) return;
+      const $ = this.$;
+      const running = s.active.length + s.pending;
+      const finished = s.done + s.failed.length;
+
+      $("title").textContent = s.cancelled
+        ? t("queueCancelled")
+        : running
+          ? t("queueTitle", s.done, s.total)
+          : t("queueFinished", s.done, s.total);
+      $("fill").style.width = `${s.total ? Math.round((finished / s.total) * 100) : 0}%`;
+
+      const meta = [];
+      if (s.active.length) meta.push(t("queueActive", s.active.length));
+      if (s.pending) meta.push(t("queuePending", s.pending));
+      meta.push(t("queueBytes", formatBytes(s.bytes)));
+      $("meta").textContent = meta.join(" · ");
+
+      $("files").innerHTML = s.active
+        .map((f) => {
+          const pct = f.total > 0 ? `${Math.floor((f.received / f.total) * 100)}%` : formatBytes(f.received);
+          return `<div class="file"><span>${escapeHtml(f.name || "…")}</span><span>${pct}</span></div>`;
+        })
+        .join("");
+      $("failed").textContent = s.failed.length ? t("queueFailed", s.failed.length, s.failed.join(", ")) : "";
+
+      const actions = [];
+      if (running) actions.push(`<button data-action="cancel">${escapeHtml(t("queueCancel"))}</button>`);
+      else if (s.canShow) actions.push(`<button data-action="show">${escapeHtml(t("queueShowFolder"))}</button>`);
+      $("actions").innerHTML = actions.join("");
+
+      if (!running) {
+        clearInterval(this.timer);
+        this.timer = null;
+      }
+    },
+  };
 
   // ---------------------------------------------------------------------------
   // Main loop
@@ -1049,6 +1199,11 @@
   chrome.storage.sync.get(DEFAULTS).then((s) => {
     settings = s;
     refresh();
+  });
+
+  // Downloads still running from earlier (other tab, page reload): show their progress.
+  sendMessage({ type: "queueStatus" }).then((s) => {
+    if (s.active?.length || s.pending) progressCard.start();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
