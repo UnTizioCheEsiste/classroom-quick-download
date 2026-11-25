@@ -55,7 +55,7 @@ Everything runs locally in your browser. The extension talks only to Google (Cla
 - Selection mode only sees posts loaded on the page: scroll to the bottom of the stream to include older ones.
 - Drive file types are guessed from the name and the label on the attachment card; unknown ones go under *Other*.
 - If "Ask where to save each file" is on in your browser, separate downloads open one dialog per file: use the ZIP option, or turn that setting off.
-- The ZIP is built in memory by a hidden extension page (`offscreen.html`): very large courses need enough RAM.
+- The ZIP is built in memory by a hidden extension page (`offscreen.html`), 6 files at a time. Videos, audio and files over 100 MB are kept out of it: they're saved as normal downloads (in parallel, straight to disk) in the same folders.
 - If a teacher disabled downloading for a file, Drive blocks it and it's reported as failed.
 
 ## Development
@@ -76,7 +76,13 @@ checks the ZIP writer, and
 node test/drive-test.mjs
 ```
 
-checks how Drive's "can't scan this file for viruses" page (large files such as videos) is bypassed.
+checks how Drive's "can't scan this file for viruses" page (large files such as videos) is bypassed, and
+
+```bash
+node test/offscreen-test.mjs
+```
+
+checks which files go in the ZIP and which are downloaded separately.
 
 Mock Classroom pages for testing `content.js` outside Chrome:
 

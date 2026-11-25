@@ -250,7 +250,8 @@
         return await sendMessage({
           type: "downloadZip",
           filename: zipFilename(),
-          files: files.map((f) => ({ url: f.url, name: f.label, folder: postFolder(f) })),
+          baseFolder: courseFolder(), // where videos / large files kept out of the ZIP go
+          files: files.map((f) => ({ url: f.url, name: f.label, folder: postFolder(f), type: f.type })),
         });
       } finally {
         zipProgressHandler = null;
@@ -264,7 +265,11 @@
 
   function resultText(res) {
     if (!res.ok) return t("errorPrefix", res.error || t("downloadFailed"));
-    const what = res.zip ? t("zipReady", res.started) : t("downloadsStarted", res.started);
+    const parts = [];
+    if (res.zip) parts.push(t("zipReady", res.started));
+    else if (!res.separate) parts.push(t("downloadsStarted", res.started));
+    if (res.separate) parts.push(t("separateStarted", res.separate));
+    const what = parts.join(" · ");
     if (!res.failed) return `${what}.`;
     const names = res.failedNames?.length ? `: ${res.failedNames.join(", ")}` : "";
     return t("someFailed", what, res.failed, names);
@@ -471,7 +476,7 @@
   // ---------------------------------------------------------------------------
 
   const PROBE_PREFIX = "cqd-probe:";
-  const PROBE_CONCURRENCY = 2;
+  const PROBE_CONCURRENCY = 4;
   const remote = {
     cache: new Map(), // post id → { state: "done" | "error", files }
     jobs: new Map(), // post id → page being loaded

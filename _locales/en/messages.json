@@ -27,6 +27,7 @@
   "downloadFailed": { "message": "download failed" },
   "zipReady": { "message": "✓ ZIP with {0} files ready" },
   "downloadsStarted": { "message": "✓ {0} downloads started" },
+  "separateStarted": { "message": "✓ {0} large files (videos…) downloading separately" },
   "someFailed": { "message": "{0}, {1} failed{2}." },
 
   "selectPost": { "message": "Select post" },

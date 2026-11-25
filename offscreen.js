@@ -1,8 +1,22 @@
 // Offscreen document: fetches the files with the browser's Google session,
 // packs them into a ZIP and hands the service worker a Blob URL to save.
 
-const ZIP_CONCURRENCY = 3;
+// Google throttles each file's speed, so several at once go faster overall;
+// much higher risks being temporarily blocked.
+const ZIP_CONCURRENCY = 6;
 const blobUrls = new Map(); // jobId → Blob URL, revoked once the download is done
+
+// Large files stay out of the ZIP: the ZIP is built in memory (and is limited
+// to 4 GB), while a normal download streams to disk in parallel.
+const LARGE_FILE_BYTES = 100 * 1024 * 1024;
+const SEPARATE_TYPES = new Set(["video", "audio"]);
+const SEPARATE = Symbol("separate");
+
+function isLarge(res) {
+  const type = res.headers.get("content-type") || "";
+  const size = Number(res.headers.get("content-length")) || 0;
+  return /^(video|audio)\//i.test(type) || size > LARGE_FILE_BYTES;
+}
 
 const MIME_EXT = {
   "application/pdf": "pdf",
@@ -37,18 +51,20 @@ function fallbackName(label, contentType) {
   return `${label}.${ext}`;
 }
 
+/** Returns a ZIP entry, or SEPARATE when the file is too big for the ZIP. */
 async function fetchFile(file, onBytes) {
-  let res = await fetch(file.url, { credentials: "include" });
+  const ctrl = new AbortController();
+  const res = await fetch(file.url, { credentials: "include", signal: ctrl.signal });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  let type = res.headers.get("content-type") || "";
+  const type = res.headers.get("content-type") || "";
   if (/text\/html/i.test(type)) {
-    // Large Drive files: "can't scan for viruses" page → follow "Download anyway" (drive.js).
-    const confirmUrl = DRIVE_DOWNLOAD.test(file.url) ? driveConfirmUrl(await res.text(), res.url) : null;
-    if (!confirmUrl) throw new Error(t("gotHtmlPage"));
-    res = await fetch(confirmUrl, { credentials: "include" });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    type = res.headers.get("content-type") || "";
-    if (/text\/html/i.test(type)) throw new Error(t("gotHtmlPage"));
+    // Drive's "can't scan for viruses" page only appears for large files.
+    if (DRIVE_DOWNLOAD.test(file.url) && driveConfirmUrl(await res.text(), res.url)) return SEPARATE;
+    throw new Error(t("gotHtmlPage"));
+  }
+  if (isLarge(res)) {
+    ctrl.abort(); // don't read the body: it will be a normal download
+    return SEPARATE;
   }
   const name = filenameFromHeader(res.headers.get("content-disposition")) || fallbackName(file.name || "file", type);
 
@@ -98,14 +114,18 @@ async function buildZip({ jobId, files, tabId }) {
 
   const results = new Array(files.length);
   const failed = [];
+  const separate = []; // { url, folder } — downloaded normally by the service worker
   let next = 0;
   const worker = async () => {
     while (next < files.length) {
       const i = next++;
+      const file = files[i];
       try {
-        results[i] = await fetchFile(files[i], progress);
+        const entry = SEPARATE_TYPES.has(file.type) ? SEPARATE : await fetchFile(file, progress);
+        if (entry === SEPARATE) separate.push({ url: file.url, folder: file.folder || "" });
+        else results[i] = entry;
       } catch (err) {
-        failed.push({ name: files[i].name, error: String(err.message || err) });
+        failed.push({ name: file.name, error: String(err.message || err) });
       }
       done++;
       progress(true);
@@ -115,12 +135,13 @@ async function buildZip({ jobId, files, tabId }) {
 
   const ok = results.filter(Boolean);
   if (!ok.length) {
+    if (separate.length) return { ok: true, url: null, count: 0, separate, failed };
     return { ok: false, error: failed[0]?.error || t("noFilesDownloaded"), failed };
   }
   const blob = makeZip(uniquePaths(ok));
   const url = URL.createObjectURL(blob);
   blobUrls.set(jobId, url);
-  return { ok: true, url, count: ok.length, failed, size: blob.size };
+  return { ok: true, url, count: ok.length, separate, failed, size: blob.size };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

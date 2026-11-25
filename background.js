@@ -66,7 +66,12 @@ async function ensureOffscreen() {
   }
 }
 
-async function downloadZip(files, filename, tabId) {
+/**
+ * files: [{ url, name, folder, type }]; folder is the post subfolder inside the ZIP.
+ * baseFolder: where in Downloads the ZIP goes — large files kept out of the ZIP
+ * are saved there too, in the same post subfolders.
+ */
+async function downloadZip(files, filename, baseFolder, tabId) {
   if (zipBusy) return { ok: false, error: t("zipBusy") };
   zipBusy = true;
   try {
@@ -76,15 +81,27 @@ async function downloadZip(files, filename, tabId) {
     if (!res?.ok) {
       return { ok: false, error: res?.error || t("zipFailed"), failedNames: (res?.failed || []).map((f) => f.name) };
     }
-    const zipName = filename || "Classroom - posts.zip";
-    pendingNames.set(res.url, zipName);
-    const downloadId = await chrome.downloads.download({ url: res.url, filename: zipName, conflictAction: "uniquify" });
-    // Kept in storage: the service worker may go to sleep while you pick where to save.
-    await chrome.storage.session.set({ [`zip:${downloadId}`]: jobId });
+
+    // Videos and large files: normal downloads, streamed to disk in parallel.
+    const separate = res.separate || [];
+    if (separate.length) {
+      await downloadMany(
+        separate.map((f) => ({ url: f.url, folder: [baseFolder, f.folder].filter(Boolean).join("/") }))
+      );
+    }
+
+    if (res.url) {
+      const zipName = filename || "Classroom - posts.zip";
+      pendingNames.set(res.url, zipName);
+      const downloadId = await chrome.downloads.download({ url: res.url, filename: zipName, conflictAction: "uniquify" });
+      // Kept in storage: the service worker may go to sleep while you pick where to save.
+      await chrome.storage.session.set({ [`zip:${downloadId}`]: jobId });
+    }
     return {
       ok: true,
-      zip: true,
+      zip: !!res.url,
       started: res.count,
+      separate: separate.length,
       failed: res.failed.length,
       failedNames: res.failed.map((f) => f.name),
     };
@@ -116,7 +133,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg?.type === "downloadZip" && Array.isArray(msg.files)) {
-    downloadZip(msg.files, msg.filename, sender.tab?.id).then(sendResponse, (err) =>
+    downloadZip(msg.files, msg.filename, msg.baseFolder || "", sender.tab?.id).then(sendResponse, (err) =>
       sendResponse({ ok: false, error: String(err.message || err) })
     );
     return true;
