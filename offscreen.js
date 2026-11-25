@@ -38,11 +38,17 @@ function fallbackName(label, contentType) {
 }
 
 async function fetchFile(file, onBytes) {
-  const res = await fetch(file.url, { credentials: "include" });
+  let res = await fetch(file.url, { credentials: "include" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const type = res.headers.get("content-type") || "";
+  let type = res.headers.get("content-type") || "";
   if (/text\/html/i.test(type)) {
-    throw new Error(t("gotHtmlPage"));
+    // Large Drive files: "can't scan for viruses" page → follow "Download anyway" (drive.js).
+    const confirmUrl = DRIVE_DOWNLOAD.test(file.url) ? driveConfirmUrl(await res.text(), res.url) : null;
+    if (!confirmUrl) throw new Error(t("gotHtmlPage"));
+    res = await fetch(confirmUrl, { credentials: "include" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    type = res.headers.get("content-type") || "";
+    if (/text\/html/i.test(type)) throw new Error(t("gotHtmlPage"));
   }
   const name = filenameFromHeader(res.headers.get("content-disposition")) || fallbackName(file.name || "file", type);
 

@@ -2,7 +2,7 @@
 // chrome.downloads API. The browser's Google session cookies are included, so
 // private course files work too.
 
-importScripts("i18n.js");
+importScripts("i18n.js", "drive.js");
 
 // URL → subfolder to save the file in (multiple downloads only).
 const pendingFolders = new Map();
@@ -31,8 +31,9 @@ chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
 async function downloadMany(items) {
   let ok = 0;
   let failed = 0;
-  for (const { url, folder } of items) {
-    if (folder) pendingFolders.set(url, folder);
+  for (const item of items) {
+    const url = await bypassDriveWarning(item.url);
+    if (item.folder) pendingFolders.set(url, item.folder);
     try {
       await chrome.downloads.download({ url });
       ok++;
@@ -122,8 +123,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg?.type === "download" && typeof msg.url === "string") {
-    chrome.downloads
-      .download({ url: msg.url })
+    bypassDriveWarning(msg.url)
+      .then((url) => chrome.downloads.download({ url }))
       .then((downloadId) => sendResponse({ ok: true, downloadId }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true; // async response

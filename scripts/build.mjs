@@ -13,6 +13,7 @@ const INCLUDE = [
   "background.js",
   "content.js",
   "content.css",
+  "drive.js",
   "i18n.js",
   "offscreen.html",
   "offscreen.js",

@@ -70,7 +70,13 @@ builds `dist/classroom-quick-download-<version>.zip` with just the runtime files
 node test/zip-test.mjs test-output.zip
 ```
 
-checks the ZIP writer.
+checks the ZIP writer, and
+
+```bash
+node test/drive-test.mjs
+```
+
+checks how Drive's "can't scan this file for viruses" page (large files such as videos) is bypassed.
 
 Mock Classroom pages for testing `content.js` outside Chrome:
 
